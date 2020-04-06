@@ -1,12 +1,14 @@
 package checker
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -53,6 +55,25 @@ func BuildCheckoutRequestOptions(archiveRequest har.Request) (*http.Request, err
 // DeliveryWindow is a delivery option on the checkout page
 type DeliveryWindow string
 
+// Check calls Amazon Prime now at the given Request and attempts to return
+// DeliveryWindows from the parsed page response
+func Check(client http.Client, req *http.Request) ([]DeliveryWindow, error) {
+	resp, err := client.Do(req)
+
+	if err != nil {
+		fmt.Printf("request error: %v\n", err)
+		return []DeliveryWindow{}, fmt.Errorf("cannot make request to Amazon: %v", err)
+	}
+	defer resp.Body.Close()
+
+	rdr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return []DeliveryWindow{}, fmt.Errorf("could not decompress response: %v", err)
+	}
+
+	return ParseWindowsFromCheckoutPage(rdr)
+}
+
 // CheckEvery will check the given request at the specified interval until the
 // checker is canceled.
 func CheckEvery(ctx context.Context, interval time.Duration, req *http.Request) (chan []DeliveryWindow, error) {
@@ -69,12 +90,7 @@ func CheckEvery(ctx context.Context, interval time.Duration, req *http.Request) 
 			}
 		case <-timer:
 			{
-				resp, err := client.Do(req)
-				if err != nil {
-					log.Fatalf("cannot make request to Amazon: %v", err)
-				}
-
-				windows, err := ParseWindowsFromCheckoutPage(resp.Body)
+				windows, err := Check(client, req)
 				if err != nil {
 					log.Fatalf("cannot parse the checkout page: %v", err)
 				}
@@ -107,6 +123,15 @@ func ParseWindowsFromCheckoutPage(page io.Reader) ([]DeliveryWindow, error) {
 		window := strings.TrimSpace(element.Text())
 		results = append(results, DeliveryWindow(window))
 	})
+
+	// TODO wrap in a debug flag
+	debugFile, err := os.OpenFile("./debug.html", os.O_WRONLY, 0666)
+	if err != nil {
+		fmt.Printf("could not open debug file: %v", err)
+	}
+	raw, _ := goquery.OuterHtml(document.First())
+	fmt.Fprint(debugFile, raw)
+	debugFile.Close()
 
 	return results, nil
 }
