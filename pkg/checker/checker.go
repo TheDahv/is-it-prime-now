@@ -81,6 +81,15 @@ func CheckEvery(ctx context.Context, interval time.Duration, req *http.Request) 
 	client := http.Client{}
 
 	go func() {
+		// Run the first check
+		windows, err := Check(client, req)
+		if err != nil {
+			log.Fatalf("cannot parse the checkout page: %v", err)
+		}
+
+		out <- windows
+
+		// Set up a timer for every time thereafter
 		timer := time.Tick(interval)
 		select {
 		case <-ctx.Done():
@@ -95,9 +104,7 @@ func CheckEvery(ctx context.Context, interval time.Duration, req *http.Request) 
 					log.Fatalf("cannot parse the checkout page: %v", err)
 				}
 
-				if len(windows) > 0 {
-					out <- windows
-				}
+				out <- windows
 			}
 		}
 	}()
