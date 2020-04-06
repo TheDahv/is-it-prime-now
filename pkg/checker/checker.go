@@ -125,7 +125,7 @@ func ParseWindowsFromCheckoutPage(page io.Reader) ([]DeliveryWindow, error) {
 	})
 
 	// TODO wrap in a debug flag
-	debugFile, err := os.OpenFile("./debug.html", os.O_WRONLY, 0666)
+	debugFile, err := os.OpenFile("./debug.html", os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		fmt.Printf("could not open debug file: %v", err)
 	}
