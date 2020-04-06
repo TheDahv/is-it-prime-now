@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,13 +13,31 @@ import (
 
 	"github.com/thedahv/prime-now-checker/pkg/checker"
 	"github.com/thedahv/prime-now-checker/pkg/har"
+	"github.com/thedahv/prime-now-checker/pkg/notifications"
 )
+
+// TwilioFromNumber is the number notifications will come from. Injected at
+// build time.
+var TwilioFromNumber string
+
+// TwilioSID is the Twilio account ID. Injected at build time.
+var TwilioSID string
+
+// TwilioAuthToken is the Twilio auth token. Injected at build time.
+var TwilioAuthToken string
+
+const notificationsMax = 5
 
 const interval = 5 * time.Minute
 
 func main() {
 	a := app.New()
 	state := appState{}
+
+	notifier, err := notifications.NewTwilio(TwilioSID, TwilioAuthToken, TwilioFromNumber)
+	if err != nil {
+		log.Fatalf("unable to start Twilio client: %v", err)
+	}
 
 	w := a.NewWindow("Is it Prime Now?")
 
@@ -29,8 +48,10 @@ func main() {
 	var stopButton *widget.Button
 
 	setStartButtonEnabled := func() {
-		if state.request == nil {
+		if state.request != nil && len(state.phoneNumber) > 0 {
 			startButton.Enable()
+		} else {
+			startButton.Disable()
 		}
 	}
 
@@ -47,6 +68,9 @@ func main() {
 	cancelChecking := func() {
 		state.isChecking = false
 		state.ctx = nil
+		state.notificationsSent = 0
+		state.snoozeMsgSent = false
+
 		if state.cancel != nil {
 			state.cancel()
 		}
@@ -72,10 +96,7 @@ func main() {
 					break
 				}
 
-				log.Println("waiting for windows")
 				windows := <-windowChan
-				log.Println("got windows")
-				log.Println(windows)
 				out := ""
 				if len(windows) == 0 {
 					out = "No checkout windows"
@@ -83,11 +104,31 @@ func main() {
 					for _, window := range windows {
 						out += string(window) + "\n"
 					}
+
+					// Send notification
+					if state.notificationsSent < notificationsMax {
+						var msg string
+						if len(windows) == 1 {
+							msg = "There is 1 delivery window available for your Prime cart"
+						} else {
+							msg = fmt.Sprintf(
+								"There are %d delivery windows available for your Prime cart",
+								len(windows),
+							)
+						}
+						notifier.SendMessage(state.phoneNumber, msg)
+					} else if !state.snoozeMsgSent {
+						notifier.SendMessage(
+							state.phoneNumber,
+							"I'm going to snooze for now. Restart me to resume notifications",
+						)
+					}
 				}
 				output.SetText(out)
 			}
 		}()
 	})
+	startButton.Disable()
 
 	stopButton = widget.NewButton("Stop Checking", func() {
 		cancelChecking()
@@ -141,7 +182,7 @@ func main() {
 	w.SetContent(widget.NewVBox(
 		widget.NewLabel("Is it Prime Now?"),
 		widget.NewLabel("Phone Number"),
-		widget.NewEntry(),
+		phoneEntry,
 		widget.NewLabel("Checkout Page HAR"),
 		harEntryPath,
 		startButton,
@@ -156,10 +197,12 @@ func main() {
 }
 
 type appState struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	isChecking  bool
-	phoneNumber string
-	request     *http.Request
-	windows     []checker.DeliveryWindow
+	ctx               context.Context
+	cancel            context.CancelFunc
+	isChecking        bool
+	notificationsSent int
+	snoozeMsgSent     bool
+	phoneNumber       string
+	request           *http.Request
+	windows           []checker.DeliveryWindow
 }
